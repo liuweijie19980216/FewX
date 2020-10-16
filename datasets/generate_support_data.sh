@@ -1,10 +1,10 @@
-DATA_ROOT=/home/fanqi/data/COCO
+#DATA_ROOT=/home/fanqi/data/COCO
 
 cd coco
 
-ln -s $DATA_ROOT/train2017 ./
-ln -s $DATA_ROOT/val2017 ./
-ln -s $DATA_ROOT/annotations ./
+#ln -s $DATA_ROOT/train2017 ./
+#ln -s $DATA_ROOT/val2017 ./
+#ln -s $DATA_ROOT/annotations ./
 
 python3 1_split_filter.py ./ 
 #python3 2_balance.py ./
