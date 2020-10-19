@@ -3,7 +3,6 @@ import logging
 import numpy as np
 import torch
 from torch import nn
-
 from detectron2.data.detection_utils import convert_image_to_rgb
 from detectron2.structures import ImageList, Boxes, Instances
 from detectron2.utils.events import get_event_storage
@@ -17,9 +16,7 @@ from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 
 from detectron2.modeling.poolers import ROIPooler
 import torch.nn.functional as F
-
 from .fsod_fast_rcnn import FsodFastRCNNOutputs
-
 import os
 
 import matplotlib.pyplot as plt
@@ -29,7 +26,7 @@ from detectron2.data.catalog import MetadataCatalog
 import detectron2.data.detection_utils as utils
 import pickle
 import sys
-
+from .se_module import SELayer
 __all__ = ["FsodRCNN"]
 
 
@@ -44,6 +41,10 @@ class FsodRCNN(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
+        # se module added
+        self.use_se = False
+        if self.use_se:
+            self.se = SELayer(channel=2048)
 
         self.backbone = build_backbone(cfg)
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
@@ -168,6 +169,7 @@ class FsodRCNN(nn.Module):
             query_images = ImageList.from_tensors([images[i]]) # one query image
 
             query_feature_res4 = features['res4'][i].unsqueeze(0) # one query feature for attention rpn
+            query_feature_res4_pool = query_feature_res4.mean(dim=[2, 3], keepdim=True)
             query_features = {'res4': query_feature_res4} # one query feature for rcnn
 
             # positive support branch ##################################
@@ -175,20 +177,29 @@ class FsodRCNN(nn.Module):
             pos_end = pos_begin + self.support_shot
             pos_support_features = feature_pooled[pos_begin:pos_end].mean(0, True) # pos support features from res4, average all supports, for rcnn
             pos_support_features_pool = pos_support_features.mean(dim=[2, 3], keepdim=True) # average pooling support feature for attention rpn
-            pos_correlation = F.conv2d(query_feature_res4, pos_support_features_pool.permute(1,0,2,3), groups=1024) # attention map
+
+            pos_concated_feature = torch.cat((pos_support_features_pool, query_feature_res4_pool), dim=1)
+            if self.use_se:
+                pos_correlation = self.se(pos_concated_feature, query_feature_res4)
+            else:
+                pos_correlation = F.conv2d(query_feature_res4, pos_support_features_pool.permute(1,0,2,3), groups=1024) # attention map
 
             pos_features = {'res4': pos_correlation} # attention map for attention rpn
             pos_support_box_features = support_box_features[pos_begin:pos_end].mean(0, True)
             pos_proposals, pos_anchors, pos_pred_objectness_logits, pos_gt_labels, pos_pred_anchor_deltas, pos_gt_boxes = self.proposal_generator(query_images, pos_features, query_gt_instances) # attention rpn
             pos_pred_class_logits, pos_pred_proposal_deltas, pos_detector_proposals = self.roi_heads(query_images, query_features, pos_support_box_features, pos_proposals, query_gt_instances) # pos rcnn
-
-            # negative support branch ##################################
+           # negative support branch ##################################
             neg_begin = pos_end 
             neg_end = neg_begin + self.support_shot 
 
             neg_support_features = feature_pooled[neg_begin:neg_end].mean(0, True)
             neg_support_features_pool = neg_support_features.mean(dim=[2, 3], keepdim=True)
-            neg_correlation = F.conv2d(query_feature_res4, neg_support_features_pool.permute(1,0,2,3), groups=1024)
+
+            neg_concated_feature = torch.cat((neg_support_features_pool, query_feature_res4_pool), dim=1)
+            if self.use_se:
+                neg_correlation = self.se(neg_concated_feature, query_feature_res4)
+            else:
+                neg_correlation = F.conv2d(query_feature_res4, neg_support_features_pool.permute(1,0,2,3), groups=1024)
 
             neg_features = {'res4': neg_correlation}
 
@@ -344,14 +355,19 @@ class FsodRCNN(nn.Module):
  
         for cls_id, res4_avg in self.support_dict['res4_avg'].items():
             query_images = ImageList.from_tensors([images[0]]) # one query image
-
             query_features_res4 = features['res4'] # one query feature for attention rpn
-            query_features = {'res4': query_features_res4} # one query feature for rcnn
 
+            query_features_res4_pool = query_features_res4.mean(dim=[2, 3], keepdim=True)
+            concated_feature = torch.cat((res4_avg, query_features_res4_pool), dim=1)
+
+            query_features = {'res4': query_features_res4} # one query feature for rcnn
             # support branch ##################################
             support_box_features = self.support_dict['res5_avg'][cls_id]
 
-            correlation = F.conv2d(query_features_res4, res4_avg.permute(1,0,2,3), groups=1024) # attention map
+            if self.use_se:
+                correlation = self.se(concated_feature, query_features_res4)
+            else:
+                correlation = F.conv2d(query_features_res4, res4_avg.permute(1,0,2,3), groups=1024) # attention map
 
             support_correlation = {'res4': correlation} # attention map for attention rpn
 
