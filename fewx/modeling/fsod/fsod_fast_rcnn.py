@@ -10,7 +10,7 @@ from detectron2.layers import Linear, ShapeSpec, batched_nms, cat, nonzero_tuple
 from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.structures import Boxes, Instances
 from detectron2.utils.events import get_event_storage
-
+from .GCNet import ContextBlock
 __all__ = ["fsod_fast_rcnn_inference", "FsodFastRCNNOutputLayers"]
 
 
@@ -408,9 +408,17 @@ class FsodFastRCNNOutputLayers(nn.Module):
         self.patch_relation = True
         self.local_correlation = True
         self.global_relation = True
+        self.my_relation = True
 
         num_bbox_reg_classes = 1 if cls_agnostic_bbox_reg else num_classes
         dim_in = input_size
+
+        if self.my_relation:
+            # 1*1conv to change concated feature channel from 4096 to 2048
+            self.conv_my = nn.Conv2d(dim_in*2, dim_in, 1, padding=0, bias=False)
+            self.gc = ContextBlock(inplanes=dim_in)
+            self.cls_score_my = nn.Linear(dim_in, 2)
+
         if self.patch_relation:
             self.conv_1 = nn.Conv2d(dim_in*2, int(dim_in/4), 1, padding=0, bias=False)
             self.conv_2 = nn.Conv2d(int(dim_in/4), int(dim_in/4), 3, padding=0, bias=False)
@@ -508,9 +516,19 @@ class FsodFastRCNNOutputLayers(nn.Module):
             x = x.squeeze(3).squeeze(2)
             cls_score_pr = self.cls_score_pr(x)
 
+        if self.my_relation:
+            concated_feature = torch.cat((x_query, support_relation), 1)
+            my_out = self.conv_my(concated_feature)
+            my_out = self.gc(my_out)
+            my_out = self.avgpool_fc(my_out).squeeze(3).squeeze(2)
+            cls_score_my = self.cls_score_my(my_out)
+
         bbox_pred_all = self.bbox_pred_pr(x)
         # final result
-        cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc
+        if self.my_relation:
+            cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc + cls_score_my
+        else:
+            cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc
         
         return cls_score_all, bbox_pred_all
 
