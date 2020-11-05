@@ -10,7 +10,7 @@ from detectron2.layers import Linear, ShapeSpec, batched_nms, cat, nonzero_tuple
 from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.structures import Boxes, Instances
 from detectron2.utils.events import get_event_storage
-
+from .GCNet import ContextBlock
 __all__ = ["fsod_fast_rcnn_inference", "FsodFastRCNNOutputLayers"]
 
 
@@ -405,56 +405,70 @@ class FsodFastRCNNOutputLayers(nn.Module):
 
         box_dim = len(box2box_transform.weights)
         # few shot
-        self.patch_relation = True
-        self.local_correlation = True
-        self.global_relation = True
+        # self.patch_relation = True
+        # self.local_correlation = True
+        # self.global_relation = True
+        # self.my_relation = False
 
+        self.corr_fc = nn.Sequential(nn.Linear(2048, 1024), nn.BatchNorm1d(1024), nn.ReLU(inplace=True))
+        self.diff_fc = nn.Sequential(nn.Linear(2048, 1024), nn.BatchNorm1d(1024), nn.ReLU(inplace=True))
+        self.bbox_pred = nn.Linear(4096, 4)
+        self.cls_score = nn.Linear(4096, 2)
         num_bbox_reg_classes = 1 if cls_agnostic_bbox_reg else num_classes
         dim_in = input_size
-        if self.patch_relation:
-            self.conv_1 = nn.Conv2d(dim_in*2, int(dim_in/4), 1, padding=0, bias=False)
-            self.conv_2 = nn.Conv2d(int(dim_in/4), int(dim_in/4), 3, padding=0, bias=False)
-            self.conv_3 = nn.Conv2d(int(dim_in/4), dim_in, 1, padding=0, bias=False)
-            self.bbox_pred_pr = nn.Linear(dim_in, 4) #num_bbox_reg_classes * box_dim)
-            self.cls_score_pr = nn.Linear(dim_in, 2) #nn.Linear(dim_in, 2)
- 
-        if self.local_correlation:
-            self.conv_cor = nn.Conv2d(dim_in, dim_in, 1, padding=0, bias=False)
-            #self.bbox_pred_cor = nn.Linear(dim_in, 4)
-            self.cls_score_cor = nn.Linear(dim_in, 2) #nn.Linear(dim_in, 2)
 
-        if self.global_relation:
-            self.fc_1 = nn.Linear(dim_in * 2, dim_in)
-            self.fc_2 = nn.Linear(dim_in, dim_in)
-            #self.bbox_pred_fc = nn.Linear(dim_in, 4)
-            self.cls_score_fc = nn.Linear(dim_in, 2) #nn.Linear(dim_in, 2)
+        #self.bbox_pred_pr = nn.Linear(dim_in, 4)  # num_bbox_reg_classes * box_dim)
 
-        self.avgpool = nn.AvgPool2d(kernel_size=3,stride=1)
-        self.avgpool_fc = nn.AvgPool2d(7)
-
-        if self.patch_relation:
-            nn.init.normal_(self.conv_1.weight, std=0.01)
-            nn.init.normal_(self.conv_2.weight, std=0.01)
-            nn.init.normal_(self.conv_3.weight, std=0.01)
-            nn.init.normal_(self.cls_score_pr.weight, std=0.01)
-            nn.init.constant_(self.cls_score_pr.bias, 0)
-            nn.init.normal_(self.bbox_pred_pr.weight, std=0.001)
-            nn.init.constant_(self.bbox_pred_pr.bias, 0)
-
-        if self.local_correlation:
-            nn.init.normal_(self.conv_cor.weight, std=0.01)
-            nn.init.normal_(self.cls_score_cor.weight, std=0.01)
-            nn.init.constant_(self.cls_score_cor.bias, 0)
-            #init.normal_(self.bbox_pred_cor.weight, std=0.001)
-            #init.constant_(self.bbox_pred_cor.bias, 0)
-
-        if self.global_relation:
-            nn.init.normal_(self.fc_1.weight, std=0.01)
-            nn.init.constant_(self.fc_1.bias, 0)
-            nn.init.normal_(self.fc_2.weight, std=0.01)
-            nn.init.constant_(self.fc_2.bias, 0)
-            nn.init.normal_(self.cls_score_fc.weight, std=0.01)
-            nn.init.constant_(self.cls_score_fc.bias, 0)
+        # if self.my_relation:
+        #     # 1*1conv to change concated feature channel from 4096 to 2048
+        #     self.conv_my = nn.Conv2d(dim_in*2, dim_in, 1, padding=0, bias=False)
+        #     self.gc = ContextBlock(inplanes=dim_in)
+        #     self.cls_score_my = nn.Linear(dim_in, 2)
+        #
+        # if self.patch_relation:
+        #     self.conv_1 = nn.Conv2d(dim_in*2, int(dim_in/4), 1, padding=0, bias=False)
+        #     self.conv_2 = nn.Conv2d(int(dim_in/4), int(dim_in/4), 3, padding=0, bias=False)
+        #     self.conv_3 = nn.Conv2d(int(dim_in/4), dim_in, 1, padding=0, bias=False)
+        #
+        #     self.cls_score_pr = nn.Linear(dim_in, 2) #nn.Linear(dim_in, 2)
+        #
+        # if self.local_correlation:
+        #     self.conv_cor = nn.Conv2d(dim_in, dim_in, 1, padding=0, bias=False)
+        #     #self.bbox_pred_cor = nn.Linear(dim_in, 4)
+        #     self.cls_score_cor = nn.Linear(dim_in, 2) #nn.Linear(dim_in, 2)
+        #
+        # if self.global_relation:
+        #     self.fc_1 = nn.Linear(dim_in * 2, dim_in)
+        #     self.fc_2 = nn.Linear(dim_in, dim_in)
+        #     #self.bbox_pred_fc = nn.Linear(dim_in, 4)
+        #     self.cls_score_fc = nn.Linear(dim_in, 2) #nn.Linear(dim_in, 2)
+        #
+        # self.avgpool = nn.AvgPool2d(kernel_size=3,stride=1)
+        # self.avgpool_fc = nn.AvgPool2d(7)
+        #
+        # if self.patch_relation:
+        #     nn.init.normal_(self.conv_1.weight, std=0.01)
+        #     nn.init.normal_(self.conv_2.weight, std=0.01)
+        #     nn.init.normal_(self.conv_3.weight, std=0.01)
+        #     nn.init.normal_(self.cls_score_pr.weight, std=0.01)
+        #     nn.init.constant_(self.cls_score_pr.bias, 0)
+        #     nn.init.normal_(self.bbox_pred_pr.weight, std=0.001)
+        #     nn.init.constant_(self.bbox_pred_pr.bias, 0)
+        #
+        # if self.local_correlation:
+        #     nn.init.normal_(self.conv_cor.weight, std=0.01)
+        #     nn.init.normal_(self.cls_score_cor.weight, std=0.01)
+        #     nn.init.constant_(self.cls_score_cor.bias, 0)
+        #     #init.normal_(self.bbox_pred_cor.weight, std=0.001)
+        #     #init.constant_(self.bbox_pred_cor.bias, 0)
+        #
+        # if self.global_relation:
+        #     nn.init.normal_(self.fc_1.weight, std=0.01)
+        #     nn.init.constant_(self.fc_1.bias, 0)
+        #     nn.init.normal_(self.fc_2.weight, std=0.01)
+        #     nn.init.constant_(self.fc_2.bias, 0)
+        #     nn.init.normal_(self.cls_score_fc.weight, std=0.01)
+        #     nn.init.constant_(self.cls_score_fc.bias, 0)
         ###########################################################
 
         self.box2box_transform = box2box_transform
@@ -479,38 +493,66 @@ class FsodFastRCNNOutputLayers(nn.Module):
         }
 
     def forward(self, x_query, x_support):
-        support = x_support #.mean(0, True) # avg pool on res4 or avg pool here?
-        # fc
-        if self.global_relation:
-            x_query_fc = self.avgpool_fc(x_query).squeeze(3).squeeze(2)
-            support_fc = self.avgpool_fc(support).squeeze(3).squeeze(2).expand_as(x_query_fc)
-            cat_fc = torch.cat((x_query_fc, support_fc), 1)
-            out_fc = F.relu(self.fc_1(cat_fc), inplace=True)
-            out_fc = F.relu(self.fc_2(out_fc), inplace=True)
-            cls_score_fc = self.cls_score_fc(out_fc)
+        #support = x_support #.mean(0, True) # avg pool on res4 or avg pool here?
+        cls_feat = x_support.mean(3).mean(2).view(1, -1, 1, 1)  # 1*2048*1*1
+        roi_feat = x_query.mean(3).mean(2)  # 128*2048
 
-        # correlation
-        if self.local_correlation:
-            x_query_cor = self.conv_cor(x_query)
-            support_cor = self.conv_cor(support)
-            x_cor = F.relu(F.conv2d(x_query_cor, support_cor.permute(1,0,2,3), groups=2048), inplace=True).squeeze(3).squeeze(2)
-            cls_score_cor = self.cls_score_cor(x_cor)
+        diff_feat = roi_feat - cls_feat.squeeze()
+        corr_feat = F.conv2d(roi_feat.unsqueeze(-1).unsqueeze(-1),
+                             cls_feat.permute(1, 0, 2, 3),
+                             groups=2048).squeeze()
+        try:
+            channel_wise_feat = torch.cat((self.corr_fc(corr_feat), self.diff_fc(diff_feat)), dim=1)  # [bs, 2048]
+            channel_wise_feat = torch.cat((channel_wise_feat, roi_feat), dim=1)  # [bs, 2048*2]
+        except:
+            print(f"corr_feat:{corr_feat.shape}, diff_feat:{diff_feat.shape}")
+            print(f"x_query:{x_query.shape}, x_support:{x_support.shape}")
+        bbox_pred_all = self.bbox_pred(channel_wise_feat)
+        cls_score_all = self.cls_score(channel_wise_feat)
 
-        # relation
-        if self.patch_relation:
-            support_relation = support.expand_as(x_query)
-            x = torch.cat((x_query, support_relation), 1)
-            x = F.relu(self.conv_1(x), inplace=True) # 5x5
-            x = self.avgpool(x)
-            x = F.relu(self.conv_2(x), inplace=True) # 3x3
-            x = F.relu(self.conv_3(x), inplace=True) # 3x3
-            x = self.avgpool(x) # 1x1
-            x = x.squeeze(3).squeeze(2)
-            cls_score_pr = self.cls_score_pr(x)
 
-        bbox_pred_all = self.bbox_pred_pr(x)
+
+        # # fc
+        # if self.global_relation:
+        #     x_query_fc = self.avgpool_fc(x_query).squeeze(3).squeeze(2)
+        #     support_fc = self.avgpool_fc(support).squeeze(3).squeeze(2).expand_as(x_query_fc)
+        #     cat_fc = torch.cat((x_query_fc, support_fc), 1)
+        #     out_fc = F.relu(self.fc_1(cat_fc), inplace=True)
+        #     out_fc = F.relu(self.fc_2(out_fc), inplace=True)
+        #     cls_score_fc = self.cls_score_fc(out_fc)
+        #
+        # # correlation
+        # if self.local_correlation:
+        #     x_query_cor = self.conv_cor(x_query)
+        #     support_cor = self.conv_cor(support)
+        #     x_cor = F.relu(F.conv2d(x_query_cor, support_cor.permute(1,0,2,3), groups=2048), inplace=True).squeeze(3).squeeze(2)
+        #     cls_score_cor = self.cls_score_cor(x_cor)
+        #
+        # # relation
+        # if self.patch_relation:
+        #     support_relation = support.expand_as(x_query)
+        #     x = torch.cat((x_query, support_relation), 1)
+        #     x = F.relu(self.conv_1(x), inplace=True) # 5x5
+        #     x = self.avgpool(x)
+        #     x = F.relu(self.conv_2(x), inplace=True) # 3x3
+        #     x = F.relu(self.conv_3(x), inplace=True) # 3x3
+        #     x = self.avgpool(x) # 1x1
+        #     x = x.squeeze(3).squeeze(2)
+        #     cls_score_pr = self.cls_score_pr(x)
+        #
+        # if self.my_relation:
+        #     concated_feature = torch.cat((x_query, support_relation), 1)
+        #     my_out = self.conv_my(concated_feature)
+        #     my_out = self.gc(my_out)
+        #     my_out = self.avgpool_fc(my_out).squeeze(3).squeeze(2)
+        #     cls_score_my = self.cls_score_my(my_out)
+
+
         # final result
-        cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc
+        # if self.my_relation:
+        #     cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc + cls_score_my
+        # else:
+        #     cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc
         
         return cls_score_all, bbox_pred_all
 
