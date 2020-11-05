@@ -44,7 +44,7 @@ class FsodRCNN(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
-
+        self.meta_train = True
         self.backbone = build_backbone(cfg)
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
@@ -60,6 +60,9 @@ class FsodRCNN(nn.Module):
         self.support_way = cfg.INPUT.FS.SUPPORT_WAY
         self.support_shot = cfg.INPUT.FS.SUPPORT_SHOT
         self.logger = logging.getLogger(__name__)
+
+        if self.meta_train:
+            self.Meta_cls_score = nn.Linear(1024, 81)
 
     @property
     def device(self):
@@ -140,8 +143,10 @@ class FsodRCNN(nn.Module):
 
         # support branches
         support_bboxes_ls = []
+        support_class = []
         for item in batched_inputs:
             bboxes = item['support_bboxes']
+            support_class.append(item['support_class'])
             for box in bboxes:
                 box = Boxes(box[np.newaxis, :])
                 support_bboxes_ls.append(box.to(self.device))
@@ -162,6 +167,7 @@ class FsodRCNN(nn.Module):
         detector_loss_box_reg = []
         rpn_loss_rpn_cls = []
         rpn_loss_rpn_loc = []
+        rpn_loss_meta = []
         for i in range(B): # batch
             # query
             query_gt_instances = [gt_instances[i]] # one query gt instances
@@ -230,6 +236,16 @@ class FsodRCNN(nn.Module):
                 predictions = detector_pred_class_logits, detector_pred_proposal_deltas
                 detector_losses = self.roi_heads.box_predictor.losses(predictions, detector_proposals)
 
+            if self.meta_train:
+                pos_class  = support_class[i][0]
+                neg_class = support_class[i][-1]
+                attention_label = torch.tensor([pos_class, neg_class])
+                attentions = torch.cat((pos_support_features_pool, neg_support_features_pool), dim=0).squeeze()
+                meta_score = self.Meta_cls_score(attentions)
+                meta_loss = F.cross_entropy(meta_score, attention_label.cuda())
+            else:
+                meta_loss = 0
+            rpn_loss_meta.append(meta_loss)
             rpn_loss_rpn_cls.append(proposal_losses['loss_rpn_cls'])
             rpn_loss_rpn_loc.append(proposal_losses['loss_rpn_loc'])
             detector_loss_cls.append(detector_losses['loss_cls'])
@@ -238,6 +254,7 @@ class FsodRCNN(nn.Module):
         proposal_losses = {}
         detector_losses = {}
 
+        proposal_losses['loss_rpn_meta'] = torch.stack(rpn_loss_meta).mean()
         proposal_losses['loss_rpn_cls'] = torch.stack(rpn_loss_rpn_cls).mean()
         proposal_losses['loss_rpn_loc'] = torch.stack(rpn_loss_rpn_loc).mean()
         detector_losses['loss_cls'] = torch.stack(detector_loss_cls).mean() 

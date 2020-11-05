@@ -49,7 +49,9 @@ def fsod_get_detection_dataset_dicts(
             load_proposals_into_dataset(dataset_i_dicts, proposal_file)
             for dataset_i_dicts, proposal_file in zip(dataset_dicts_original, proposal_files)
         ]
-
+    # first trian on a few class
+    if dataset_name == 'coco_2017_train_nonvoc':
+        keep_class = [9, 10, 11, 12, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
     if 'train' not in dataset_names[0]:
         dataset_dicts = list(itertools.chain.from_iterable(dataset_dicts_original))
     else:
@@ -74,6 +76,9 @@ def fsod_get_detection_dataset_dicts(
                     ann.pop("keypoints", None)
 
                     category_id = ann['category_id']
+                    # remove other classes
+                    if category_id not in keep_class:
+                        break
                     if category_id not in category_dict.keys():
                         category_dict[category_id] = [ann]
                     else:

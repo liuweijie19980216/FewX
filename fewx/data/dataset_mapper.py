@@ -107,10 +107,11 @@ class DatasetMapperWithSupport:
                             anno.pop("segmentation", None)
                         if not self.keypoint_on:
                             anno.pop("keypoints", None)
-                support_images, support_bboxes, support_cls = self.generate_support(dataset_dict)
+                support_images, support_bboxes, support_cls, support_class = self.generate_support(dataset_dict)
                 dataset_dict['support_images'] = torch.as_tensor(np.ascontiguousarray(support_images))
                 dataset_dict['support_bboxes'] = support_bboxes
                 dataset_dict['support_cls'] = support_cls
+                dataset_dict['support_class'] = support_class
 
         if "annotations" not in dataset_dict:
             image, transforms = T.apply_transform_gens(
@@ -203,6 +204,7 @@ class DatasetMapperWithSupport:
         used_image_id = [query_img]
 
         used_id_ls = []
+        support_class = []
         for item in dataset_dict['annotations']:
             used_id_ls.append(item['id'])
         #used_category_id = [query_cls]
@@ -214,6 +216,7 @@ class DatasetMapperWithSupport:
             # Support image and box
             support_id = self.support_df.loc[(self.support_df['category_id'] == query_cls) & (~self.support_df['image_id'].isin(used_image_id)) & (~self.support_df['id'].isin(used_id_ls)), 'id'].sample(random_state=id).tolist()[0]
             support_cls = self.support_df.loc[self.support_df['id'] == support_id, 'category_id'].tolist()[0]
+            support_class.append(support_cls)
             support_img = self.support_df.loc[self.support_df['id'] == support_id, 'image_id'].tolist()[0]
             used_id_ls.append(support_id) 
             used_image_id.append(support_img)
@@ -242,6 +245,7 @@ class DatasetMapperWithSupport:
                     support_id = self.support_df.loc[(self.support_df['category_id'] == other_cls) & (~self.support_df['image_id'].isin(used_image_id)) & (~self.support_df['id'].isin(used_id_ls)), 'id'].sample(random_state=id).tolist()[0]
                      
                     support_cls = self.support_df.loc[self.support_df['id'] == support_id, 'category_id'].tolist()[0]
+                    support_class.append(support_cls)
                     support_img = self.support_df.loc[self.support_df['id'] == support_id, 'image_id'].tolist()[0]
 
                     used_id_ls.append(support_id) 
@@ -258,4 +262,4 @@ class DatasetMapperWithSupport:
                     support_category_id.append(1) #support_cls)
                     mixup_i += 1
         
-        return support_data_all, support_box_all, support_category_id
+        return support_data_all, support_box_all, support_category_id, support_class
