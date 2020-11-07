@@ -77,8 +77,9 @@ def fsod_get_detection_dataset_dicts(
 
                     category_id = ann['category_id']
                     # remove other classes
-                    if category_id not in keep_class:
-                        break
+                    if dataset_name == 'coco_2017_train_nonvoc':
+                        if category_id not in keep_class:
+                            break
                     if category_id not in category_dict.keys():
                         category_dict[category_id] = [ann]
                     else:

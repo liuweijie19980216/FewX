@@ -29,7 +29,7 @@ from detectron2.data.catalog import MetadataCatalog
 import detectron2.data.detection_utils as utils
 import pickle
 import sys
-
+from .resnet import build_resnet_backbone
 __all__ = ["FsodRCNN"]
 
 
@@ -45,11 +45,15 @@ class FsodRCNN(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         self.meta_train = True
-        self.backbone = build_backbone(cfg)
+
+        self.backbone = build_resnet_backbone(cfg)
+        #self.backbone = build_backbone(cfg)
+
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
         self.vis_period = cfg.VIS_PERIOD
         self.input_format = cfg.INPUT.FORMAT
+        self.softmax = nn.Softmax()
 
         assert len(cfg.MODEL.PIXEL_MEAN) == len(cfg.MODEL.PIXEL_STD)
         self.register_buffer("pixel_mean", torch.Tensor(cfg.MODEL.PIXEL_MEAN).view(-1, 1, 1))
@@ -139,7 +143,7 @@ class FsodRCNN(nn.Module):
         else:
             gt_instances = None
         
-        features = self.backbone(images.tensor)
+        features = self.backbone(images.tensor, support=False)
 
         # support branches
         support_bboxes_ls = []
@@ -155,7 +159,7 @@ class FsodRCNN(nn.Module):
         assert N == self.support_way * self.support_shot
 
         support_images = support_images.tensor.reshape(B*N, C, H, W)
-        support_features = self.backbone(support_images)
+        support_features = self.backbone(support_images, support=True)
         
         # support feature roi pooling
         feature_pooled = self.roi_heads.roi_pooling(support_features, support_bboxes_ls)
@@ -242,6 +246,8 @@ class FsodRCNN(nn.Module):
                 attention_label = torch.tensor([pos_class, neg_class])
                 attentions = torch.cat((pos_support_features_pool, neg_support_features_pool), dim=0).squeeze()
                 meta_score = self.Meta_cls_score(attentions)
+                logit = self.softmax(meta_score)
+                print(logit)
                 meta_loss = F.cross_entropy(meta_score, attention_label.cuda())
             else:
                 meta_loss = 0
@@ -264,6 +270,8 @@ class FsodRCNN(nn.Module):
         losses = {}
         losses.update(detector_losses)
         losses.update(proposal_losses)
+
+
         return losses
 
     def init_model(self):

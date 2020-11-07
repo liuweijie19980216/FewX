@@ -95,6 +95,7 @@ def main(args):
 
     if args.eval_only:
         model = Trainer.build_model(cfg)
+
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
             cfg.MODEL.WEIGHTS, resume=args.resume
         )
