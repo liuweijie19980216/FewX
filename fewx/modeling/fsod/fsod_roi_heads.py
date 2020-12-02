@@ -57,8 +57,10 @@ class FsodRes5ROIHeads(ROIHeads):
         # fmt: off
         self.in_features  = cfg.MODEL.ROI_HEADS.IN_FEATURES
         pooler_resolution = cfg.MODEL.ROI_BOX_HEAD.POOLER_RESOLUTION
+        pooler_resolution_res3 = 28
         pooler_type       = cfg.MODEL.ROI_BOX_HEAD.POOLER_TYPE
         pooler_scales     = (1.0 / input_shape[self.in_features[0]].stride, )
+        pooler_scales_res3 = (1.0 / input_shape['res3'].stride,)
         sampling_ratio    = cfg.MODEL.ROI_BOX_HEAD.POOLER_SAMPLING_RATIO
         self.mask_on      = cfg.MODEL.MASK_ON
         # fmt: on
@@ -68,6 +70,12 @@ class FsodRes5ROIHeads(ROIHeads):
         self.pooler = ROIPooler(
             output_size=pooler_resolution,
             scales=pooler_scales,
+            sampling_ratio=sampling_ratio,
+            pooler_type=pooler_type,
+        )
+        self.pooler_res3 = ROIPooler(
+            output_size=pooler_resolution_res3,
+            scales=pooler_scales_res3,
             sampling_ratio=sampling_ratio,
             pooler_type=pooler_type,
         )
@@ -111,11 +119,17 @@ class FsodRes5ROIHeads(ROIHeads):
         box_features = self.pooler(
             [features[f] for f in self.in_features], boxes
         )
-        #feature_pooled = box_features.mean(dim=[2, 3], keepdim=True)  # pooled to 1x1
 
-        return box_features #feature_pooled
+        return box_features
 
-    def forward(self, images, features, support_box_features, proposals, targets=None):
+    def roi_pooling_res3(self, features, boxes):
+        box_features = self.pooler_res3(
+            [features['res3']], boxes
+        )
+
+        return box_features
+
+    def forward(self, images, features, support_box_features, support_box_features_res3, proposals, targets=None):
         """
         See :meth:`ROIHeads.forward`.
         """
@@ -129,14 +143,16 @@ class FsodRes5ROIHeads(ROIHeads):
         box_features = self._shared_roi_transform(
             [features[f] for f in self.in_features], proposal_boxes
         )
+        box_features_res3 = self.roi_pooling_res3(features, proposal_boxes)
 
         #support_features = self.res5(support_features)
-        pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features, support_box_features)
+        pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features, support_box_features,
+                                                                                box_features_res3, support_box_features_res3)
 
-        return pred_class_logits, pred_proposal_deltas, proposals
+        return pred_class_logits, pred_proposal_deltas, proposals# , scae_loss
 
     @torch.no_grad()
-    def eval_with_support(self, images, features, support_proposals_dict, support_box_features_dict):
+    def eval_with_support(self, images, features, support_proposals_dict, support_box_features_dict, support_box_features_dict_res3):
         """
         See :meth:`ROIHeads.forward`.
         """
@@ -156,6 +172,7 @@ class FsodRes5ROIHeads(ROIHeads):
         box_features = self._shared_roi_transform(
             [features[f] for f in self.in_features], proposal_boxes
         )
+        box_features_res3 = self.roi_pooling_res3(features, proposal_boxes)
         
         full_scores_ls = []
         full_bboxes_ls = []
@@ -164,8 +181,12 @@ class FsodRes5ROIHeads(ROIHeads):
         #for cls_id, support_box_features in support_box_features_dict.items():
         for cls_id in cls_ls:
             support_box_features = support_box_features_dict[cls_id]
+            support_box_features_res3 = support_box_features_dict_res3[cls_id]
             query_features = box_features[cnt*100:(cnt+1)*100]
-            pred_class_logits, pred_proposal_deltas = self.box_predictor(query_features, support_box_features)
+            query_features_res3 = box_features_res3[cnt*100:(cnt+1)*100]
+
+            pred_class_logits, pred_proposal_deltas = self.box_predictor(query_features, support_box_features,
+                                                                         query_features_res3, support_box_features_res3)
             full_scores_ls.append(pred_class_logits)
             full_bboxes_ls.append(pred_proposal_deltas)
             full_cls_ls.append(torch.full_like(pred_class_logits[:, 0].unsqueeze(-1), cls_id).to(torch.int8))

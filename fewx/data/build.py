@@ -22,10 +22,13 @@ from detectron2.data.dataset_mapper import DatasetMapper
 from detectron2.data.detection_utils import check_metadata_consistency
 from detectron2.data.samplers import InferenceSampler, RepeatFactorTrainingSampler, TrainingSampler
 
-from detectron2.data.build import build_batch_data_loader, filter_images_with_only_crowd_annotations, load_proposals_into_dataset, filter_images_with_few_keypoints, print_instances_class_histogram, trivial_batch_collator, get_detection_dataset_dicts
+from detectron2.data.build import build_batch_data_loader, filter_images_with_only_crowd_annotations, \
+    load_proposals_into_dataset, filter_images_with_few_keypoints, print_instances_class_histogram, \
+    trivial_batch_collator, get_detection_dataset_dicts
+
 
 def fsod_get_detection_dataset_dicts(
-    dataset_names, filter_empty=True, min_keypoints=0, proposal_files=None
+        dataset_names, filter_empty=True, min_keypoints=0, proposal_files=None
 ):
     """
     Load and prepare dataset dicts for instance detection/segmentation and semantic segmentation.
@@ -49,7 +52,9 @@ def fsod_get_detection_dataset_dicts(
             load_proposals_into_dataset(dataset_i_dicts, proposal_file)
             for dataset_i_dicts, proposal_file in zip(dataset_dicts_original, proposal_files)
         ]
-
+    # first trian on a few class
+    if dataset_name == 'coco_2017_train_nonvoc':
+        keep_class = [9, 10, 11, 12, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35]
     if 'train' not in dataset_names[0]:
         dataset_dicts = list(itertools.chain.from_iterable(dataset_dicts_original))
     else:
@@ -74,11 +79,15 @@ def fsod_get_detection_dataset_dicts(
                     ann.pop("keypoints", None)
 
                     category_id = ann['category_id']
+                    # remove other classes
+                    if dataset_name == 'coco_2017_train_nonvoc':
+                        if category_id not in keep_class:
+                            break
                     if category_id not in category_dict.keys():
                         category_dict[category_id] = [ann]
                     else:
                         category_dict[category_id].append(ann)
-                
+
                 for key, item in category_dict.items():
                     instance_ann = {}
                     instance_ann['file_name'] = file_name
@@ -86,9 +95,8 @@ def fsod_get_detection_dataset_dicts(
                     instance_ann['width'] = width
 
                     instance_ann['annotations'] = item
-                    
-                    dataset_dicts.append(instance_ann)
 
+                    dataset_dicts.append(instance_ann)
 
     has_instances = "annotations" in dataset_dicts[0]
     # Keep images without instance-level GT if the dataset has semantic labels.
@@ -106,6 +114,7 @@ def fsod_get_detection_dataset_dicts(
         except AttributeError:  # class names are not available for this dataset
             pass
     return dataset_dicts
+
 
 def build_detection_train_loader(cfg, mapper=None):
     """
@@ -133,7 +142,7 @@ def build_detection_train_loader(cfg, mapper=None):
         proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None,
     )
     dataset = DatasetFromList(dataset_dicts, copy=False)
-    
+
     if mapper is None:
         mapper = DatasetMapper(cfg, True)
     dataset = MapDataset(dataset, mapper)
@@ -159,6 +168,7 @@ def build_detection_train_loader(cfg, mapper=None):
         num_workers=cfg.DATALOADER.NUM_WORKERS,
     )
 
+
 def build_detection_test_loader(cfg, dataset_name, mapper=None):
     """
     Similar to `build_detection_train_loader`.
@@ -176,7 +186,7 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
     """
     dataset_dicts = get_detection_dataset_dicts(
         [dataset_name],
-        filter_empty=False, # True,
+        filter_empty=False,  # True,
         proposal_files=[
             cfg.DATASETS.PROPOSAL_FILES_TEST[list(cfg.DATASETS.TEST).index(dataset_name)]
         ]
@@ -186,7 +196,7 @@ def build_detection_test_loader(cfg, dataset_name, mapper=None):
 
     dataset = DatasetFromList(dataset_dicts)
     if mapper is None:
-        mapper = DatasetMapper(cfg, False) # True)
+        mapper = DatasetMapper(cfg, False)  # True)
     dataset = MapDataset(dataset, mapper)
 
     sampler = InferenceSampler(len(dataset))

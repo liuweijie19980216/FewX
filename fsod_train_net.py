@@ -91,6 +91,7 @@ def setup(args):
 
 
 def main(args):
+
     cfg = setup(args)
 
     if args.eval_only:
@@ -108,7 +109,8 @@ def main(args):
 
 if __name__ == "__main__":
     args = default_argument_parser().parse_args()
-    args.config_file = "configs/fsod/R_50_C4_1x.yaml"
+    #args.config_file = "/home/liuwj/Repository/FewX/configs/fsod/R_50_C4_1x.yaml"
+    # args.eval_only = True
     print("Command Line Args:", args)
     launch(
         main,
