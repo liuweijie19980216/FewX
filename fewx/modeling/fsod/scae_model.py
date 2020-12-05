@@ -14,18 +14,18 @@ from .setmodules import *
 
 
 class PCAE(nn.Module):
-    def __init__(self, num_capsules=32, template_size=14, num_templates=32, num_feature_maps=24):
+    def __init__(self, num_capsules=24, template_size=11, num_templates=24, num_feature_maps=24):
         super(PCAE, self).__init__()
         self.num_capsules = num_capsules
         self.num_feature_maps = num_feature_maps
         self.num_templates = num_templates
-        self.capsules = nn.Sequential(nn.Conv2d(512, 128, 3, stride=1),
+        self.capsules = nn.Sequential(nn.Conv2d(512, 128, 3, stride=2),
+                                      nn.ReLU(),
+                                      nn.Conv2d(128, 128, 3, stride=2),
                                       nn.ReLU(),
                                       nn.Conv2d(128, 128, 3, stride=1),
                                       nn.ReLU(),
-                                      nn.Conv2d(128, 128, 3, stride=2),
-                                      nn.ReLU(),
-                                      nn.Conv2d(128, 128, 3, stride=2),
+                                      nn.Conv2d(128, 128, 3, stride=1),
                                       nn.ReLU(),
                                       nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))
 
@@ -149,17 +149,17 @@ class SetTransformer(nn.Module):
 
 
 class OCAE(nn.Module):
-    def __init__(self, dim_input=219, num_capsules=32, set_out=128, set_head=2, special_feat=16):
+    def __init__(self, dim_input=144, num_capsules=24, set_out=256, set_head=1, special_feat=16):
         super(OCAE, self).__init__()
 
         self.set_transformer = nn.Sequential(
-            SetTransformer(dim_input, num_capsules, set_out, num_heads=set_head, dim_hidden=64, ln=True),
-            SetTransformer(set_out, num_capsules, set_out, num_heads=set_head, dim_hidden=64, ln=True),
-            SetTransformer(set_out, num_capsules, special_feat + 1 + 9, num_heads=set_head, dim_hidden=64, ln=True),
+            SetTransformer(dim_input, num_capsules, set_out, num_heads=set_head, dim_hidden=16, ln=True),
+            SetTransformer(set_out, num_capsules, set_out, num_heads=set_head, dim_hidden=16, ln=True),
+            SetTransformer(set_out, num_capsules, special_feat + 1 + 9, num_heads=set_head, dim_hidden=16, ln=True),
             )
         self.mlps = nn.ModuleList([nn.Sequential(nn.Linear(special_feat, special_feat),
                                                  nn.ReLU(),
-                                                 nn.Linear(special_feat, 64)) for _ in range(num_capsules)])
+                                                 nn.Linear(special_feat, 48)) for _ in range(num_capsules)])
         self.op_mat = Parameter(torch.randn(num_capsules, num_capsules, 3, 3))
         self.relu = nn.ReLU()
         self.sigmoid = nn.Sigmoid()
@@ -169,11 +169,11 @@ class OCAE(nn.Module):
         object_parts = self.set_transformer(inp)  # (B,K,9+16+1)
         if mode == 'train':
             noise_1 = torch.FloatTensor(*object_parts.size()[:2]).uniform_(-2, 2).to(device)
-            noise_2 = torch.FloatTensor(object_parts.shape[0], 32).uniform_(-2, 2).to(device)
+            noise_2 = torch.FloatTensor(object_parts.shape[0], 24).uniform_(-2, 2).to(device)
 
         else:
             noise_1 = torch.zeros(*object_parts.size()[:2]).to(device)
-            noise_2 = torch.zeros(object_parts.shape[0], 32).to(device)
+            noise_2 = torch.zeros(object_parts.shape[0], 24).to(device)
 
         ov_k, c_k, a_k = self.relu(object_parts[:, :, :9]).view(*object_parts.size()[:2], 1, 3, 3), self.relu(
             object_parts[:, :, 9:25]), self.sigmoid(object_parts[:, :, -1] + noise_1).view(*object_parts.size()[:2], 1, 1, 1)
@@ -183,8 +183,8 @@ class OCAE(nn.Module):
         temp_lambda = []
         for num, mlp in enumerate(self.mlps):
             mlp_out = self.mlps[num](c_k[:, num, :])
-            temp_a.append(self.sigmoid(mlp_out[:, :32] + noise_2).unsqueeze(1))
-            temp_lambda.append(self.relu(mlp_out[:, 32:]).unsqueeze(1))
+            temp_a.append(self.sigmoid(mlp_out[:, :24] + noise_2).unsqueeze(1))
+            temp_lambda.append(self.relu(mlp_out[:, 24:]).unsqueeze(1))
         a_kn = torch.cat(temp_a, 1).unsqueeze(-1).unsqueeze(-1)  # (B,K,M,1,1)
         lambda_kn = torch.cat(temp_lambda, 1).unsqueeze(-1).unsqueeze(-1)  # (B,K,M,1,1)
         lambda_kn = lambda_kn * 1 + self.epsilon  # for supressing nan values when taking reciprocal

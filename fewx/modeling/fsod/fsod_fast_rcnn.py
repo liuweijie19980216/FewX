@@ -207,23 +207,35 @@ class FsodFastRCNNOutputs(object):
         Log the accuracy metrics to EventStorage.
         """
         num_instances = self.gt_classes.numel()
-        pred_classes = self.pred_class_logits.argmax(dim=1)
+        # 256个proposals的预测类别
+        pred_classes = self.pred_class_logits.argmax(dim=1)  # [256，]
+        # 负类的索引，1
         bg_class_ind = self.pred_class_logits.shape[1] - 1
-
-        fg_inds = (self.gt_classes >= 0) & (self.gt_classes < bg_class_ind)
+        # 将256个proposals类别标签中正类的写为True,负类为False
+        fg_inds = (self.gt_classes >= 0) & (self.gt_classes < bg_class_ind)  # [256，]
+        # 正类的个数
         num_fg = fg_inds.nonzero().numel()
+        # 正类标签 [0,0,...,0]
         fg_gt_classes = self.gt_classes[fg_inds]
+        # 标签为正类的proposals被预测的类别
         fg_pred_classes = pred_classes[fg_inds]
 
+        # 标签为正类的proposals被预测成负类的个数
         num_false_negative = (fg_pred_classes == bg_class_ind).nonzero().numel()
+        # 预测正确的proposals个数
         num_accurate = (pred_classes == self.gt_classes).nonzero().numel()
+        # 标签为正类的proposals被预测正确的个数
         fg_num_accurate = (fg_pred_classes == fg_gt_classes).nonzero().numel()
 
+        # 将分类结果写入日志
         storage = get_event_storage()
         if num_instances > 0:
+            # proposals分类准确率
             storage.put_scalar("fast_rcnn/cls_accuracy", num_accurate / num_instances)
             if num_fg > 0:
+                # 正类proposals中预测的正确率
                 storage.put_scalar("fast_rcnn/fg_cls_accuracy", fg_num_accurate / num_fg)
+                # 正类proposals中预测的错误率
                 storage.put_scalar("fast_rcnn/false_negative", num_false_negative / num_fg)
 
     def softmax_cross_entropy_loss(self):
@@ -232,26 +244,31 @@ class FsodFastRCNNOutputs(object):
         Returns:
             scalar Tensor
         """
+        # 将proposals的分类情况写入日志
         self._log_accuracy()
 
         num_instances = self.gt_classes.numel()
-
-        cls_score_softmax = F.softmax(self.pred_class_logits, dim=1)
-
+        # 256个proposals被预测为正负类的概率
+        cls_score_softmax = F.softmax(self.pred_class_logits, dim=1)  # [256,2]
+        # 正类的索引
         fg_inds = (self.gt_classes == 0).nonzero().squeeze(-1)
+        # 负类的索引
         bg_inds = (self.gt_classes == 1).nonzero().squeeze(-1)
-
-        
+        # 负类proposals的预测结果
         bg_cls_score_softmax = cls_score_softmax[bg_inds, :]
-
+        # 负类proposals与pos_support对比得到的预测概率，参与损失计算的proposals(PF)个数：正类proposals数量的2倍，但不能超过64个
         bg_num_0 = max(1, min(fg_inds.shape[0] * 2, int(num_instances * 0.25))) #int(num_instances * 0.5 - fg_inds.shape[0])))
+        # 负类proposals与neg_support对比得到的预测概率，参与损失计算的proposals(PB)个数：正类proposals数量的1倍，但不能超过PF数量
         bg_num_1 = max(1, min(fg_inds.shape[0] * 1, bg_num_0))
-
+        # 将负类proposals的预测概率按照正类概率从大到小排序
         sorted, sorted_bg_inds = torch.sort(bg_cls_score_softmax[:, 0], descending=True)
+        # 将负类propsals索引按照被预测的正类概率从大到小排序
         real_bg_inds = bg_inds[sorted_bg_inds]
+        # 参与损失计算的PF的索引
         real_bg_topk_inds_0 = real_bg_inds[real_bg_inds < int(num_instances * 0.5)][:bg_num_0]
+        # 参与损失计算的PB的索引
         real_bg_topk_inds_1 = real_bg_inds[real_bg_inds >= int(num_instances * 0.5)][:bg_num_1]
-
+        # 参与损失计算的proposals索引,正类proposals数量：N + PF：2N + BF：N
         topk_inds = torch.cat([fg_inds, real_bg_topk_inds_0, real_bg_topk_inds_1], dim=0)
 
         return F.cross_entropy(self.pred_class_logits[topk_inds], self.gt_classes[topk_inds]) #, reduction="mean")
@@ -422,19 +439,19 @@ class FsodFastRCNNOutputLayers(nn.Module):
             self.scae_loss = scae_model.SCAE_LOSS()
             self.pcae = scae_model.PCAE()
             self.ocae = scae_model.OCAE()
-            self.cls_score_part = nn.Linear(1024, 2)
-            self.cls_score_object = nn.Linear(1024, 2)
+            self.cls_score_part = nn.Linear(576, 2)
+            self.cls_score_object = nn.Linear(576, 2)
 
-        if self.patch_relation:
-            self.conv_1 = nn.Conv2d(dim_in * 2, int(dim_in / 4), 1, padding=0, bias=False)
-            self.conv_2 = nn.Conv2d(int(dim_in / 4), int(dim_in / 4), 3, padding=0, bias=False)
-            self.conv_3 = nn.Conv2d(int(dim_in / 4), dim_in, 1, padding=0, bias=False)
-            self.bbox_pred_pr = nn.Linear(dim_in, 4)  # num_bbox_reg_classes * box_dim)
-            self.cls_score_pr = nn.Linear(dim_in, 2)  # nn.Linear(dim_in, 2)
+        # if self.patch_relation:
+        #     self.conv_1 = nn.Conv2d(dim_in * 2, int(dim_in / 4), 1, padding=0, bias=False)
+        #     self.conv_2 = nn.Conv2d(int(dim_in / 4), int(dim_in / 4), 3, padding=0, bias=False)
+        #     self.conv_3 = nn.Conv2d(int(dim_in / 4), dim_in, 1, padding=0, bias=False)
+        #     self.bbox_pred_pr = nn.Linear(dim_in, 4)  # num_bbox_reg_classes * box_dim)
+        #     self.cls_score_pr = nn.Linear(dim_in, 2)  # nn.Linear(dim_in, 2)
 
         if self.local_correlation:
             self.conv_cor = nn.Conv2d(dim_in, dim_in, 1, padding=0, bias=False)
-            # self.bbox_pred_cor = nn.Linear(dim_in, 4)
+            self.bbox_pred_cor = nn.Linear(dim_in, 4)
             self.cls_score_cor = nn.Linear(dim_in, 2)  # nn.Linear(dim_in, 2)
 
         if self.global_relation:
@@ -446,14 +463,14 @@ class FsodFastRCNNOutputLayers(nn.Module):
         self.avgpool = nn.AvgPool2d(kernel_size=3, stride=1)
         self.avgpool_fc = nn.AvgPool2d(7)
 
-        if self.patch_relation:
-            nn.init.normal_(self.conv_1.weight, std=0.01)
-            nn.init.normal_(self.conv_2.weight, std=0.01)
-            nn.init.normal_(self.conv_3.weight, std=0.01)
-            nn.init.normal_(self.cls_score_pr.weight, std=0.01)
-            nn.init.constant_(self.cls_score_pr.bias, 0)
-            nn.init.normal_(self.bbox_pred_pr.weight, std=0.001)
-            nn.init.constant_(self.bbox_pred_pr.bias, 0)
+        # if self.patch_relation:
+        #     nn.init.normal_(self.conv_1.weight, std=0.01)
+        #     nn.init.normal_(self.conv_2.weight, std=0.01)
+        #     nn.init.normal_(self.conv_3.weight, std=0.01)
+        #     nn.init.normal_(self.cls_score_pr.weight, std=0.01)
+        #     nn.init.constant_(self.cls_score_pr.bias, 0)
+        #     nn.init.normal_(self.bbox_pred_pr.weight, std=0.001)
+        #     nn.init.constant_(self.bbox_pred_pr.bias, 0)
 
         if self.local_correlation:
             nn.init.normal_(self.conv_cor.weight, std=0.01)
@@ -512,18 +529,18 @@ class FsodFastRCNNOutputLayers(nn.Module):
             cls_score_cor = self.cls_score_cor(x_cor)
 
         # relation
-        if self.patch_relation:
-            support_relation = support.expand_as(x_query)
-            x = torch.cat((x_query, support_relation), 1)
-            x = F.relu(self.conv_1(x), inplace=True)  # 5x5
-            x = self.avgpool(x)
-            x = F.relu(self.conv_2(x), inplace=True)  # 3x3
-            x = F.relu(self.conv_3(x), inplace=True)  # 3x3
-            x = self.avgpool(x)  # 1x1
-            x = x.squeeze(3).squeeze(2)
-            cls_score_pr = self.cls_score_pr(x)
+        # if self.patch_relation:
+        #     support_relation = support.expand_as(x_query)
+        #     x = torch.cat((x_query, support_relation), 1)
+        #     x = F.relu(self.conv_1(x), inplace=True)  # 5x5
+        #     x = self.avgpool(x)
+        #     x = F.relu(self.conv_2(x), inplace=True)  # 3x3
+        #     x = F.relu(self.conv_3(x), inplace=True)  # 3x3
+        #     x = self.avgpool(x)  # 1x1
+        #     x = x.squeeze(3).squeeze(2)
+        #     cls_score_pr = self.cls_score_pr(x)
 
-        bbox_pred_all = self.bbox_pred_pr(x)
+        bbox_pred_all = self.bbox_pred_cor(x_cor)
         # final result
 
         if self.capsule_relation:
@@ -537,7 +554,7 @@ class FsodFastRCNNOutputLayers(nn.Module):
             # scae = scae_model.SCAE().to(device)
             # input_image = torch.cat((x_query_res3, x_support_res3))
             # scae_out = scae(input_image, device, mode)
-            K = 32
+            K = 24
             C = 2
             B = 128
             # k_c = torch.tensor(float(K/C)).to(device)
@@ -582,7 +599,7 @@ class FsodFastRCNNOutputLayers(nn.Module):
 
             cls_score_capsule = part_score + object_score
 
-        cls_score_all = cls_score_pr + cls_score_cor + cls_score_fc + cls_score_capsule
+        cls_score_all = cls_score_cor + cls_score_fc + cls_score_capsule
         return cls_score_all, bbox_pred_all #, scae_loss
 
     # TODO: move the implementation to this class.

@@ -141,8 +141,13 @@ def build_detection_train_loader(cfg, mapper=None):
         else 0,
         proposal_files=cfg.DATASETS.PROPOSAL_FILES_TRAIN if cfg.MODEL.LOAD_PROPOSALS else None,
     )
+    # 类别id: (0,1,...,79)
     dataset = DatasetFromList(dataset_dicts, copy=False)
-
+    # cls_id = []
+    # for data in dataset:
+    #     for anno in data['annotations']:
+    #         cls_id.append(anno['category_id'])
+    # print(set(cls_id))
     if mapper is None:
         mapper = DatasetMapper(cfg, True)
     dataset = MapDataset(dataset, mapper)

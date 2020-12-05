@@ -46,15 +46,15 @@ class DatasetMapperWithSupport:
         self.tfm_gens = utils.build_transform_gen(cfg, is_train)
 
         # fmt: off
-        self.img_format     = cfg.INPUT.FORMAT
-        self.mask_on        = cfg.MODEL.MASK_ON
-        self.mask_format    = cfg.INPUT.MASK_FORMAT
-        self.keypoint_on    = cfg.MODEL.KEYPOINT_ON
+        self.img_format = cfg.INPUT.FORMAT
+        self.mask_on = cfg.MODEL.MASK_ON
+        self.mask_format = cfg.INPUT.MASK_FORMAT
+        self.keypoint_on = cfg.MODEL.KEYPOINT_ON
         self.load_proposals = cfg.MODEL.LOAD_PROPOSALS
 
-        self.few_shot       = cfg.INPUT.FS.FEW_SHOT
-        self.support_way       = cfg.INPUT.FS.SUPPORT_WAY
-        self.support_shot       = cfg.INPUT.FS.SUPPORT_SHOT
+        self.few_shot = cfg.INPUT.FS.FEW_SHOT
+        self.support_way = cfg.INPUT.FS.SUPPORT_WAY
+        self.support_shot = cfg.INPUT.FS.SUPPORT_SHOT
         # fmt: on
         if self.keypoint_on and is_train:
             # Flip only makes sense in training
@@ -84,7 +84,6 @@ class DatasetMapperWithSupport:
             reverse_id_mapper = lambda dataset_id: metadata.thing_dataset_id_to_contiguous_id[dataset_id]  # noqa
             self.support_df['category_id'] = self.support_df['category_id'].map(reverse_id_mapper)
 
-
     def __call__(self, dataset_dict):
         """
         Args:
@@ -107,10 +106,11 @@ class DatasetMapperWithSupport:
                             anno.pop("segmentation", None)
                         if not self.keypoint_on:
                             anno.pop("keypoints", None)
-                support_images, support_bboxes, support_cls = self.generate_support(dataset_dict)
+                support_images, support_bboxes, support_cls, support_classes = self.generate_support(dataset_dict)
                 dataset_dict['support_images'] = torch.as_tensor(np.ascontiguousarray(support_images))
                 dataset_dict['support_bboxes'] = support_bboxes
                 dataset_dict['support_cls'] = support_cls
+                dataset_dict['support_classes'] = support_classes
 
         if "annotations" not in dataset_dict:
             image, transforms = T.apply_transform_gens(
@@ -161,7 +161,7 @@ class DatasetMapperWithSupport:
                     anno.pop("segmentation", None)
                 if not self.keypoint_on:
                     anno.pop("keypoints", None)
-            
+
             # USER: Implement additional transformations if you have other types of data
             annos = [
                 utils.transform_instance_annotations(
@@ -189,73 +189,91 @@ class DatasetMapperWithSupport:
         return dataset_dict
 
     def generate_support(self, dataset_dict):
-        support_way = self.support_way #2
-        support_shot = self.support_shot #5
-        
-        id = dataset_dict['annotations'][0]['id']
-        query_cls = self.support_df.loc[self.support_df['id']==id, 'category_id'].tolist()[0] # they share the same category_id and image_id
-        query_img = self.support_df.loc[self.support_df['id']==id, 'image_id'].tolist()[0]
-        all_cls = self.support_df.loc[self.support_df['image_id']==query_img, 'category_id'].tolist()
+        support_way = self.support_way  # 2
+        support_shot = self.support_shot  # 5
+
+        id = dataset_dict['annotations'][0]['id']  # 该bbox的id
+        # 在support set中找到该bbox的类别id,并将其作为query类别
+        query_cls = self.support_df.loc[self.support_df['id'] == id, 'category_id'].tolist()[
+            0]  # they share the same category_id and image_id
+        # 在support set中找到该bbox对应的图片id,并将其作为query image
+        query_img = self.support_df.loc[self.support_df['id'] == id, 'image_id'].tolist()[0]
+        # query image上所有的类别id
+        all_cls = self.support_df.loc[self.support_df['image_id'] == query_img, 'category_id'].tolist()
 
         # Crop support data and get new support box in the support data
-        support_data_all = np.zeros((support_way * support_shot, 3, 320, 320), dtype = np.float32)
-        support_box_all = np.zeros((support_way * support_shot, 4), dtype = np.float32)
+        support_data_all = np.zeros((support_way * support_shot, 3, 320, 320), dtype=np.float32)
+        support_box_all = np.zeros((support_way * support_shot, 4), dtype=np.float32)
         used_image_id = [query_img]
 
         used_id_ls = []
+        support_class = []
         for item in dataset_dict['annotations']:
             used_id_ls.append(item['id'])
-        #used_category_id = [query_cls]
+        # used_category_id = [query_cls]
         used_category_id = list(set(all_cls))
         support_category_id = []
         mixup_i = 0
 
         for shot in range(support_shot):
             # Support image and box
-            support_id = self.support_df.loc[(self.support_df['category_id'] == query_cls) & (~self.support_df['image_id'].isin(used_image_id)) & (~self.support_df['id'].isin(used_id_ls)), 'id'].sample(random_state=id).tolist()[0]
+            # support set中类别与query image相同的图片id
+            support_id = self.support_df.loc[
+                (self.support_df['category_id'] == query_cls) & (~self.support_df['image_id'].isin(used_image_id)) & (
+                    ~self.support_df['id'].isin(used_id_ls)), 'id'].sample(random_state=id).tolist()[0]
             support_cls = self.support_df.loc[self.support_df['id'] == support_id, 'category_id'].tolist()[0]
+            support_class.append(support_cls)
             support_img = self.support_df.loc[self.support_df['id'] == support_id, 'image_id'].tolist()[0]
-            used_id_ls.append(support_id) 
+            used_id_ls.append(support_id)
             used_image_id.append(support_img)
 
             support_db = self.support_df.loc[self.support_df['id'] == support_id, :]
             assert support_db['id'].values[0] == support_id
-            
-            support_data = utils.read_image('./datasets/coco/' + support_db["file_path"].tolist()[0], format=self.img_format)
+
+            support_data = utils.read_image('./datasets/coco/' + support_db["file_path"].tolist()[0],
+                                            format=self.img_format)
             support_data = torch.as_tensor(np.ascontiguousarray(support_data.transpose(2, 0, 1)))
             support_box = support_db['support_box'].tolist()[0]
-            #print(support_data)
+            # print(support_data)
             support_data_all[mixup_i] = support_data
             support_box_all[mixup_i] = support_box
-            support_category_id.append(0) #support_cls)
+            support_category_id.append(0)  # support_cls)
             mixup_i += 1
 
         if support_way == 1:
             pass
+        # neg support
         else:
-            for way in range(support_way-1):
-                other_cls = self.support_df.loc[(~self.support_df['category_id'].isin(used_category_id)), 'category_id'].drop_duplicates().sample(random_state=id).tolist()[0]
+            for way in range(support_way - 1):
+                other_cls = self.support_df.loc[
+                    (~self.support_df['category_id'].isin(used_category_id)), 'category_id'].drop_duplicates().sample(
+                    random_state=id).tolist()[0]
                 used_category_id.append(other_cls)
                 for shot in range(support_shot):
                     # Support image and box
 
-                    support_id = self.support_df.loc[(self.support_df['category_id'] == other_cls) & (~self.support_df['image_id'].isin(used_image_id)) & (~self.support_df['id'].isin(used_id_ls)), 'id'].sample(random_state=id).tolist()[0]
-                     
+                    support_id = self.support_df.loc[(self.support_df['category_id'] == other_cls) & (
+                        ~self.support_df['image_id'].isin(used_image_id)) & (
+                                                         ~self.support_df['id'].isin(used_id_ls)), 'id'].sample(
+                        random_state=id).tolist()[0]
+
                     support_cls = self.support_df.loc[self.support_df['id'] == support_id, 'category_id'].tolist()[0]
+                    support_class.append(support_cls)
                     support_img = self.support_df.loc[self.support_df['id'] == support_id, 'image_id'].tolist()[0]
 
-                    used_id_ls.append(support_id) 
+                    used_id_ls.append(support_id)
                     used_image_id.append(support_img)
 
                     support_db = self.support_df.loc[self.support_df['id'] == support_id, :]
                     assert support_db['id'].values[0] == support_id
 
-                    support_data = utils.read_image('./datasets/coco/' + support_db["file_path"].tolist()[0], format=self.img_format)
+                    support_data = utils.read_image('./datasets/coco/' + support_db["file_path"].tolist()[0],
+                                                    format=self.img_format)
                     support_data = torch.as_tensor(np.ascontiguousarray(support_data.transpose(2, 0, 1)))
                     support_box = support_db['support_box'].tolist()[0]
                     support_data_all[mixup_i] = support_data
                     support_box_all[mixup_i] = support_box
-                    support_category_id.append(1) #support_cls)
+                    support_category_id.append(1)  # support_cls)
                     mixup_i += 1
-        
-        return support_data_all, support_box_all, support_category_id
+
+        return support_data_all, support_box_all, support_category_id, support_class

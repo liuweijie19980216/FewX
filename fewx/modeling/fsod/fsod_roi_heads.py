@@ -129,7 +129,8 @@ class FsodRes5ROIHeads(ROIHeads):
 
         return box_features
 
-    def forward(self, images, features, support_box_features, support_box_features_res3, proposals, targets=None):
+    def forward(self, images, features, support_box_features, support_box_features_res3, proposals,
+                targets=None):
         """
         See :meth:`ROIHeads.forward`.
         """

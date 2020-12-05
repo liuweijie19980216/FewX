@@ -14,12 +14,11 @@ from detectron2.modeling.postprocessing import detector_postprocess
 from detectron2.modeling.proposal_generator import build_proposal_generator
 from .fsod_roi_heads import build_roi_heads
 from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
-
+import copy
 from detectron2.modeling.poolers import ROIPooler
 import torch.nn.functional as F
 
 from .fsod_fast_rcnn import FsodFastRCNNOutputs
-
 import os
 
 import matplotlib.pyplot as plt
@@ -128,20 +127,25 @@ class FsodRCNN(nn.Module):
             return self.inference(batched_inputs)
         
         images, support_images = self.preprocess_image(batched_inputs)
+        query_target = []  # 保留query image中gt_box原始类别，便于给proposals分配真实标签
         if "instances" in batched_inputs[0]:
             for x in batched_inputs:
+                query_target.append(copy.deepcopy(x['instances']).to(self.device))
+                # 将query image中gt_box类别全更新为0，表示正类
                 x['instances'].set('gt_classes', torch.full_like(x['instances'].get('gt_classes'), 0))
             
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         else:
             gt_instances = None
-        
+
         features = self.backbone(images.tensor)
 
         # support branches
         support_bboxes_ls = []
+        support_classes = []
         for item in batched_inputs:
             bboxes = item['support_bboxes']
+            support_classes.append(item['support_classes'])
             for box in bboxes:
                 box = Boxes(box[np.newaxis, :])
                 support_bboxes_ls.append(box.to(self.device))
@@ -169,6 +173,7 @@ class FsodRCNN(nn.Module):
         for i in range(B): # batch
             # query
             query_gt_instances = [gt_instances[i]] # one query gt instances
+            # query_gt_target = [query_target[i]]
             query_images = ImageList.from_tensors([images[i]]) # one query image
 
             query_feature_res4 = features['res4'][i].unsqueeze(0) # one query feature for attention rpn
@@ -230,7 +235,7 @@ class FsodRCNN(nn.Module):
             else:
                 proposal_losses = {}
 
-            # detector loss
+           # detector loss
             detector_pred_class_logits = torch.cat([pos_pred_class_logits, neg_pred_class_logits], dim=0)
             detector_pred_proposal_deltas = torch.cat([pos_pred_proposal_deltas, neg_pred_proposal_deltas], dim=0)
             for item in neg_detector_proposals:

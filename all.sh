@@ -12,7 +12,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 fsod_train_net.py --num-gpus 2 \
 
 CUDA_VISIBLE_DEVICES=0,1 python3 fsod_train_net.py --num-gpus 2 \
 	--config-file configs/fsod/finetune_R_50_C4_1x.yaml \
-	--eval-only MODEL.WEIGHTS ./output/fsod/finetune_dir/R_50_C4_1x/model_final.pth 2>&1 | tee scae_test_log.txt
+	--eval-only MODEL.WEIGHTS ./output/fsod/finetune_dir/R_50_C4_1x/model_final.pth 2>&1 | tee log/scae_test_log.txt
 
 #CUDA_VISIBLE_DEVICES=0,1,2,3 python3 fsod_train_net.py --num-gpus 4 \
 #	--config-file configs/fsod/finetune_R_50_C4_1x.yaml \
