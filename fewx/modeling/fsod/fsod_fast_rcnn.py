@@ -10,7 +10,7 @@ from detectron2.layers import Linear, ShapeSpec, batched_nms, cat, nonzero_tuple
 from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.structures import Boxes, Instances
 from detectron2.utils.events import get_event_storage
-from . import scae_model
+from fewx.modeling.fsod import scae_model
 
 __all__ = ["fsod_fast_rcnn_inference", "FsodFastRCNNOutputLayers"]
 
@@ -154,6 +154,8 @@ class FsodFastRCNNOutputs(object):
         pred_class_logits,
         pred_proposal_deltas,
         proposals,
+        object_pred,
+        object_labels,
         smooth_l1_beta=0,
     ):
         """
@@ -184,6 +186,8 @@ class FsodFastRCNNOutputs(object):
         self.pred_proposal_deltas = pred_proposal_deltas
         self.smooth_l1_beta = smooth_l1_beta
         self.image_shapes = [x.image_size for x in proposals]
+        self.object_pred = object_pred
+        self.object_labels = object_labels
 
         if len(proposals):
             box_type = type(proposals[0].proposal_boxes)
@@ -237,7 +241,8 @@ class FsodFastRCNNOutputs(object):
                 storage.put_scalar("fast_rcnn/fg_cls_accuracy", fg_num_accurate / num_fg)
                 # 正类proposals中预测的错误率
                 storage.put_scalar("fast_rcnn/false_negative", num_false_negative / num_fg)
-
+    def object_loss(self):
+        return F.cross_entropy(self.object_pred, self.object_labels)
     def softmax_cross_entropy_loss(self):
         """
         Compute the softmax cross entropy loss for box classification.
@@ -354,6 +359,7 @@ class FsodFastRCNNOutputs(object):
         return {
             "loss_cls": self.softmax_cross_entropy_loss(),
             "loss_box_reg": self.smooth_l1_loss(),
+            "loss_object": self.object_loss(),
         }
 
     def predict_boxes(self):
@@ -436,18 +442,15 @@ class FsodFastRCNNOutputLayers(nn.Module):
 
         if self.capsule_relation:
             self.scae = scae_model.SCAE()
-            self.scae_loss = scae_model.SCAE_LOSS()
-            self.pcae = scae_model.PCAE()
-            self.ocae = scae_model.OCAE()
             self.cls_score_part = nn.Linear(576, 2)
             self.cls_score_object = nn.Linear(576, 2)
 
-        # if self.patch_relation:
-        #     self.conv_1 = nn.Conv2d(dim_in * 2, int(dim_in / 4), 1, padding=0, bias=False)
-        #     self.conv_2 = nn.Conv2d(int(dim_in / 4), int(dim_in / 4), 3, padding=0, bias=False)
-        #     self.conv_3 = nn.Conv2d(int(dim_in / 4), dim_in, 1, padding=0, bias=False)
-        #     self.bbox_pred_pr = nn.Linear(dim_in, 4)  # num_bbox_reg_classes * box_dim)
-        #     self.cls_score_pr = nn.Linear(dim_in, 2)  # nn.Linear(dim_in, 2)
+        if self.patch_relation:
+            self.conv_1 = nn.Conv2d(dim_in * 2, int(dim_in / 4), 1, padding=0, bias=False)
+            self.conv_2 = nn.Conv2d(int(dim_in / 4), int(dim_in / 4), 3, padding=0, bias=False)
+            self.conv_3 = nn.Conv2d(int(dim_in / 4), dim_in, 1, padding=0, bias=False)
+            self.bbox_pred_pr = nn.Linear(dim_in, 4)  # num_bbox_reg_classes * box_dim)
+            self.cls_score_pr = nn.Linear(dim_in, 2)  # nn.Linear(dim_in, 2)
 
         if self.local_correlation:
             self.conv_cor = nn.Conv2d(dim_in, dim_in, 1, padding=0, bias=False)
@@ -463,14 +466,14 @@ class FsodFastRCNNOutputLayers(nn.Module):
         self.avgpool = nn.AvgPool2d(kernel_size=3, stride=1)
         self.avgpool_fc = nn.AvgPool2d(7)
 
-        # if self.patch_relation:
-        #     nn.init.normal_(self.conv_1.weight, std=0.01)
-        #     nn.init.normal_(self.conv_2.weight, std=0.01)
-        #     nn.init.normal_(self.conv_3.weight, std=0.01)
-        #     nn.init.normal_(self.cls_score_pr.weight, std=0.01)
-        #     nn.init.constant_(self.cls_score_pr.bias, 0)
-        #     nn.init.normal_(self.bbox_pred_pr.weight, std=0.001)
-        #     nn.init.constant_(self.bbox_pred_pr.bias, 0)
+        if self.patch_relation:
+            nn.init.normal_(self.conv_1.weight, std=0.01)
+            nn.init.normal_(self.conv_2.weight, std=0.01)
+            nn.init.normal_(self.conv_3.weight, std=0.01)
+            nn.init.normal_(self.cls_score_pr.weight, std=0.01)
+            nn.init.constant_(self.cls_score_pr.bias, 0)
+            nn.init.normal_(self.bbox_pred_pr.weight, std=0.001)
+            nn.init.constant_(self.bbox_pred_pr.bias, 0)
 
         if self.local_correlation:
             nn.init.normal_(self.conv_cor.weight, std=0.01)
@@ -529,81 +532,51 @@ class FsodFastRCNNOutputLayers(nn.Module):
             cls_score_cor = self.cls_score_cor(x_cor)
 
         # relation
-        # if self.patch_relation:
-        #     support_relation = support.expand_as(x_query)
-        #     x = torch.cat((x_query, support_relation), 1)
-        #     x = F.relu(self.conv_1(x), inplace=True)  # 5x5
-        #     x = self.avgpool(x)
-        #     x = F.relu(self.conv_2(x), inplace=True)  # 3x3
-        #     x = F.relu(self.conv_3(x), inplace=True)  # 3x3
-        #     x = self.avgpool(x)  # 1x1
-        #     x = x.squeeze(3).squeeze(2)
-        #     cls_score_pr = self.cls_score_pr(x)
+        if self.patch_relation:
+            support_relation = support.expand_as(x_query)
+            x = torch.cat((x_query, support_relation), 1)
+            x = F.relu(self.conv_1(x), inplace=True)  # 5x5
+            x = self.avgpool(x)
+            x = F.relu(self.conv_2(x), inplace=True)  # 3x3
+            x = F.relu(self.conv_3(x), inplace=True)  # 3x3
+            x = self.avgpool(x)  # 1x1
+            x = x.squeeze(3).squeeze(2)
+            cls_score_pr = self.cls_score_pr(x)
 
-        bbox_pred_all = self.bbox_pred_cor(x_cor)
+        bbox_pred_all = self.bbox_pred_pr(x)
         # final result
 
         if self.capsule_relation:
+            batch_size = x_support_res3.size(0)
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if self.training:
                 mode = 'train'
             else:
                 mode = 'test'
-            # autoencoder
-
-            # scae = scae_model.SCAE().to(device)
-            # input_image = torch.cat((x_query_res3, x_support_res3))
-            # scae_out = scae(input_image, device, mode)
-            K = 24
-            C = 2
-            B = 128
-            # k_c = torch.tensor(float(K/C)).to(device)
-            # b_c = torch.tensor(float(B/C)).to(device)
-            # scae_loss = self.scae_loss(scae_out, b_c=b_c, k_c=k_c)
-
             # part
-            batch_size = x_query_res3.size(0)
-            # part of query
-            _, query_ocae_input, query_xm, query_dm, query_cz = self.pcae(x_query_res3, device, mode=mode)
-            # feature vector of part capsule, (B,K,22)
-            query_part_feature = torch.cat((query_xm, query_cz), dim=2) * query_dm
-            query_part_feature_list = [query_part_feature[i] for i in range(batch_size)]
-            # the capsule index of max persence logit in K part capsule, (B,)
-            #query_part_max_logit = torch.argmax(query_dm.squeeze(), dim=1).unsqueeze(-1)
-            # part of support
-            _, support_ocae_input, support_xm, support_dm, support_cz = self.pcae(x_support_res3, device, mode=mode)
-            support_part_feature = torch.cat((support_xm, support_cz), dim=2) * support_dm
-
-            part_correlation = [torch.mm(query_part_feature_list[i], support_part_feature.squeeze().T)
+            support_part, support_object, support_object_score  = self.scae(x_support_res3, device, mode)
+            query_part, query_object, query_object_score = self.scae(x_query_res3, device, mode)
+            query_part_list = [query_part[i] for i in range(batch_size)]
+            part_correlation = [torch.mm(query_part_list[i], support_part.squeeze().T)
                                 for i in range(batch_size)]
-            part_correlation_tensor = torch.cat(part_correlation,dim=0).view(batch_size, -1, K)
-
+            part_correlation_tensor = torch.cat(part_correlation,dim=0)
             part_score = self.cls_score_part(part_correlation_tensor.view(batch_size, -1))
 
             # object
-            # object of query
-            _, _, _, _, query_object_capsule = self.ocae(query_ocae_input, query_xm, query_dm, device, mode=mode)
-            query_object_ak = query_object_capsule[:, :, -1].unsqueeze(-1)
-            query_object_feature = query_object_capsule[:, :, :-1] * query_object_ak
-            query_object_feature_list = [query_object_feature[i] for i in range(batch_size)]
-            # query_object_max_logit = torch.argmax(query_object_ak.squeeze(), dim=1).unsqueeze(-1)
-            # object of support
-            _, _, _, _, support_object_capsule = self.ocae(support_ocae_input, support_xm, support_dm, device, mode=mode)
-            support_object_ak = support_object_capsule[:, :, -1].unsqueeze(-1)
-            support_object_feature = support_object_capsule[:, :, :-1] * support_object_ak
-            object_correlation = [torch.mm(query_object_feature_list[i], support_object_feature.squeeze().T)
+
+            query_object_list = [query_object[i] for i in range(batch_size)]
+            object_correlation = [torch.mm(query_object_list[i], support_object.squeeze().T)
                                   for i in range(batch_size)]
-            object_correlation_tensor = torch.cat(object_correlation, dim=0).view(batch_size, -1, K)
-
+            object_correlation_tensor = torch.cat(object_correlation, dim=0)
             object_score = self.cls_score_object(object_correlation_tensor.view(batch_size, -1))
-
             cls_score_capsule = part_score + object_score
+            pred_object = torch.cat((query_object_score, support_object_score), dim=0)
 
-        cls_score_all = cls_score_cor + cls_score_fc + cls_score_capsule
-        return cls_score_all, bbox_pred_all #, scae_loss
+        cls_score_all = cls_score_cor + cls_score_fc + cls_score_pr + cls_score_capsule
+        return cls_score_all, bbox_pred_all, pred_object
 
     # TODO: move the implementation to this class.
-    def losses(self, predictions, proposals):
+    def losses(self, predictions, proposals, object_pred, object_labels):
         """
         Args:
             predictions: return values of :meth:`forward()`.
@@ -612,7 +585,7 @@ class FsodFastRCNNOutputLayers(nn.Module):
         """
         scores, proposal_deltas = predictions
         return FsodFastRCNNOutputs(
-            self.box2box_transform, scores, proposal_deltas, proposals, self.smooth_l1_beta
+            self.box2box_transform, scores, proposal_deltas, proposals, object_pred, object_labels,self.smooth_l1_beta
         ).losses()
 
     def inference(self, pred_cls, predictions, proposals):

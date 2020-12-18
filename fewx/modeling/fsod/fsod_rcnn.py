@@ -43,7 +43,6 @@ class FsodRCNN(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
-
         self.backbone = build_backbone(cfg)
         self.proposal_generator = build_proposal_generator(cfg, self.backbone.output_shape())
         self.roi_heads = build_roi_heads(cfg, self.backbone.output_shape())
@@ -127,13 +126,10 @@ class FsodRCNN(nn.Module):
             return self.inference(batched_inputs)
         
         images, support_images = self.preprocess_image(batched_inputs)
-        query_target = []  # 保留query image中gt_box原始类别，便于给proposals分配真实标签
         if "instances" in batched_inputs[0]:
             for x in batched_inputs:
-                query_target.append(copy.deepcopy(x['instances']).to(self.device))
                 # 将query image中gt_box类别全更新为0，表示正类
                 x['instances'].set('gt_classes', torch.full_like(x['instances'].get('gt_classes'), 0))
-            
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         else:
             gt_instances = None
@@ -167,7 +163,7 @@ class FsodRCNN(nn.Module):
 
         detector_loss_cls = []
         detector_loss_box_reg = []
-        detector_loss_scae = []
+        detector_loss_object = []
         rpn_loss_rpn_cls = []
         rpn_loss_rpn_loc = []
         for i in range(B): # batch
@@ -192,7 +188,7 @@ class FsodRCNN(nn.Module):
             pos_support_box_features = support_box_features[pos_begin:pos_end].mean(0, True)
             pos_support_box_features_res3 = support_box_features_res3[pos_begin:pos_end].mean(0, True)
             pos_proposals, pos_anchors, pos_pred_objectness_logits, pos_gt_labels, pos_pred_anchor_deltas, pos_gt_boxes = self.proposal_generator(query_images, pos_features, query_gt_instances) # attention rpn
-            pos_pred_class_logits, pos_pred_proposal_deltas, pos_detector_proposals = \
+            pos_pred_class_logits, pos_pred_proposal_deltas, pos_detector_proposals, pos_object_pred = \
                 self.roi_heads(query_images, query_features, pos_support_box_features, pos_support_box_features_res3,
                                pos_proposals, query_gt_instances) # pos rcnn
 
@@ -209,7 +205,7 @@ class FsodRCNN(nn.Module):
             neg_support_box_features = support_box_features[neg_begin:neg_end].mean(0, True)
             neg_support_box_features_res3 = support_box_features_res3[neg_begin:neg_end].mean(0, True)
             neg_proposals, neg_anchors, neg_pred_objectness_logits, neg_gt_labels, neg_pred_anchor_deltas, neg_gt_boxes = self.proposal_generator(query_images, neg_features, query_gt_instances)
-            neg_pred_class_logits, neg_pred_proposal_deltas, neg_detector_proposals = \
+            neg_pred_class_logits, neg_pred_proposal_deltas, neg_detector_proposals, neg_object_pred = \
                 self.roi_heads(query_images, query_features, neg_support_box_features, neg_support_box_features_res3,
                                neg_proposals, query_gt_instances)
 
@@ -240,19 +236,35 @@ class FsodRCNN(nn.Module):
             detector_pred_proposal_deltas = torch.cat([pos_pred_proposal_deltas, neg_pred_proposal_deltas], dim=0)
             for item in neg_detector_proposals:
                 item.gt_classes = torch.full_like(item.gt_classes, 1)
+            ##############################scae_loss#################################################
+            # 正类只选择前景proposals与support
+            object_index = []
+            object_labels = []
+            # 前景proposals
+            for gt_index, gt_class in enumerate(pos_detector_proposals[0].get('gt_classes')):
+                if gt_class == 0:
+                    object_index.append(gt_index)
+                    object_labels.append(torch.tensor(support_classes[i][0]).view(1, ))
+            # 加上support
+            object_pred = torch.cat(
+                (pos_object_pred[object_index], pos_object_pred[-1, :].unsqueeze(0)), dim=0)
+            object_labels.append(torch.tensor(support_classes[i][0]).view(1, ))
+            # 负类中只选择support object进行分类
+            object_pred = torch.cat((object_pred, neg_object_pred[-1, :].unsqueeze(0)), dim=0)
+            object_labels.append(torch.tensor(support_classes[i][-1]).view(1, ))
+            object_labels = torch.cat([label.cuda() for label in object_labels], dim=0)
             
             #detector_proposals = pos_detector_proposals + neg_detector_proposals
             detector_proposals = [Instances.cat(pos_detector_proposals + neg_detector_proposals)]
             if self.training:
                 predictions = detector_pred_class_logits, detector_pred_proposal_deltas
-                detector_losses = self.roi_heads.box_predictor.losses(predictions, detector_proposals)
+                detector_losses = self.roi_heads.box_predictor.losses(predictions, detector_proposals, object_pred, object_labels)
 
-            # scae_loss = (pos_scae_loss + neg_scae_loss) / 258
-            # detector_loss_scae.append(scae_loss)
             rpn_loss_rpn_cls.append(proposal_losses['loss_rpn_cls'])
             rpn_loss_rpn_loc.append(proposal_losses['loss_rpn_loc'])
             detector_loss_cls.append(detector_losses['loss_cls'])
             detector_loss_box_reg.append(detector_losses['loss_box_reg'])
+            detector_loss_object.append(detector_losses['loss_object'])
         
         proposal_losses = {}
         detector_losses = {}
@@ -261,7 +273,7 @@ class FsodRCNN(nn.Module):
         proposal_losses['loss_rpn_loc'] = torch.stack(rpn_loss_rpn_loc).mean()
         detector_losses['loss_cls'] = torch.stack(detector_loss_cls).mean()
         detector_losses['loss_box_reg'] = torch.stack(detector_loss_box_reg).mean()
-        # detector_losses['loss_scae'] = torch.stack(detector_loss_scae).mean()
+        detector_losses['loss_object'] = torch.stack(detector_loss_object).mean()
 
 
         losses = {}

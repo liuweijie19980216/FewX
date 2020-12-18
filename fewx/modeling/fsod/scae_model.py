@@ -29,6 +29,7 @@ class PCAE(nn.Module):
                                       nn.ReLU(),
                                       nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))
 
+
         self.templates = nn.ParameterList([nn.Parameter(torch.randn(1, template_size, template_size))
                                            for _ in range(num_templates)])
         self.soft_max = nn.Softmax(1)
@@ -215,21 +216,21 @@ class SCAE(nn.Module):
         super(SCAE, self).__init__()
         self.pcae = PCAE()
         self.ocae = OCAE()
+        self.cls_object = nn.Linear(600, 80)
 
     def forward(self, x, device, mode):
-        image_likelihood, input_ocae, x_m, d_m, c_z = self.pcae(x, device, mode)
-        part_likelihood, a_k, a_kn, gaussian, object_capsule = self.ocae(input_ocae, x_m, d_m, device, mode)
-        return image_likelihood, part_likelihood, a_k, a_kn, gaussian
-
+        batch_size = x.size(0)
+        _, ocae_input, xm, dm, cz = self.pcae(x, device, mode=mode)
+        part_feature = torch.cat((xm, cz), dim=2) * dm
+        _, _, _, _, object_capsule = self.ocae(ocae_input, xm, dm, device, mode=mode)
+        object_ak = object_capsule[:, :, -1].unsqueeze(-1)
+        object_feature = object_capsule[:, :, :-1] * object_ak
+        object_scores = self.cls_object(object_feature.view(batch_size, -1))
+        return part_feature, object_feature, object_scores
 
 class SCAE_LOSS(nn.Module):
     def __init__(self):
         super(SCAE_LOSS, self).__init__()
-
-    def entropy(self, x):
-        h = F.softmax(x, dim=-1) * F.log_softmax(x, dim=-1)
-        h = -1.0 * h.sum(-1)
-        return h.mean()
 
     def forward(self, output_scae, b_c, k_c):
         img_lik, part_lik, a_k, a_kn, gaussian = output_scae

@@ -147,10 +147,10 @@ class FsodRes5ROIHeads(ROIHeads):
         box_features_res3 = self.roi_pooling_res3(features, proposal_boxes)
 
         #support_features = self.res5(support_features)
-        pred_class_logits, pred_proposal_deltas = self.box_predictor(box_features, support_box_features,
+        pred_class_logits, pred_proposal_deltas, pred_object = self.box_predictor(box_features, support_box_features,
                                                                                 box_features_res3, support_box_features_res3)
 
-        return pred_class_logits, pred_proposal_deltas, proposals# , scae_loss
+        return pred_class_logits, pred_proposal_deltas, proposals, pred_object# , scae_loss
 
     @torch.no_grad()
     def eval_with_support(self, images, features, support_proposals_dict, support_box_features_dict, support_box_features_dict_res3):
@@ -186,7 +186,7 @@ class FsodRes5ROIHeads(ROIHeads):
             query_features = box_features[cnt*100:(cnt+1)*100]
             query_features_res3 = box_features_res3[cnt*100:(cnt+1)*100]
 
-            pred_class_logits, pred_proposal_deltas = self.box_predictor(query_features, support_box_features,
+            pred_class_logits, pred_proposal_deltas,_ = self.box_predictor(query_features, support_box_features,
                                                                          query_features_res3, support_box_features_res3)
             full_scores_ls.append(pred_class_logits)
             full_bboxes_ls.append(pred_proposal_deltas)
