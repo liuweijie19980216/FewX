@@ -19,12 +19,23 @@ class PCAE(nn.Module):
         self.num_capsules = num_capsules
         self.num_feature_maps = num_feature_maps
         self.num_templates = num_templates
-        self.capsules = nn.Sequential(nn.Conv2d(512, 128, 3, stride=2),
+        # # res3
+        # self.capsules = nn.Sequential(nn.Conv2d(512, 128, 3, stride=2),
+        #                               nn.ReLU(),
+        #                               nn.Conv2d(128, 128, 3, stride=2),
+        #                               nn.ReLU(),
+        #                               nn.Conv2d(128, 128, 3, stride=1),
+        #                               nn.ReLU(),
+        #                               nn.Conv2d(128, 128, 3, stride=1),
+        #                               nn.ReLU(),
+        #                               nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))
+        # res4
+        self.capsules = nn.Sequential(nn.Conv2d(1024, 128, 3, stride=2),
                                       nn.ReLU(),
-                                      nn.Conv2d(128, 128, 3, stride=2),
-                                      nn.ReLU(),
-                                      nn.Conv2d(128, 128, 3, stride=1),
-                                      nn.ReLU(),
+                                      # nn.Conv2d(128, 128, 3, stride=2),
+                                      # nn.ReLU(),
+                                      # nn.Conv2d(128, 128, 3, stride=1),
+                                      # nn.ReLU(),
                                       nn.Conv2d(128, 128, 3, stride=1),
                                       nn.ReLU(),
                                       nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))

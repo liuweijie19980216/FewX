@@ -155,6 +155,7 @@ class FsodRCNN(nn.Module):
         # support feature roi pooling
         feature_pooled = self.roi_heads.roi_pooling(support_features, support_bboxes_ls)
         support_box_features_res3 = self.roi_heads.roi_pooling_res3(support_features, support_bboxes_ls)
+        support_box_features_res4 = self.roi_heads.roi_pooling(support_features, support_bboxes_ls)
 
 
         support_box_features = self.roi_heads._shared_roi_transform([support_features[f] for f in self.in_features], support_bboxes_ls)
@@ -187,10 +188,12 @@ class FsodRCNN(nn.Module):
             pos_features = {'res4': pos_correlation} # attention map for attention rpn
             pos_support_box_features = support_box_features[pos_begin:pos_end].mean(0, True)
             pos_support_box_features_res3 = support_box_features_res3[pos_begin:pos_end].mean(0, True)
+            pos_support_box_features_res4 = support_box_features_res4[pos_begin:pos_end].mean(0, True)
+
             pos_proposals, pos_anchors, pos_pred_objectness_logits, pos_gt_labels, pos_pred_anchor_deltas, pos_gt_boxes = self.proposal_generator(query_images, pos_features, query_gt_instances) # attention rpn
             pos_pred_class_logits, pos_pred_proposal_deltas, pos_detector_proposals, pos_object_pred = \
                 self.roi_heads(query_images, query_features, pos_support_box_features, pos_support_box_features_res3,
-                               pos_proposals, query_gt_instances) # pos rcnn
+                               pos_support_box_features_res4, pos_proposals, query_gt_instances) # pos rcnn
 
             # negative support branch ##################################
             neg_begin = pos_end 
@@ -204,10 +207,12 @@ class FsodRCNN(nn.Module):
 
             neg_support_box_features = support_box_features[neg_begin:neg_end].mean(0, True)
             neg_support_box_features_res3 = support_box_features_res3[neg_begin:neg_end].mean(0, True)
+            neg_support_box_features_res4 = support_box_features_res4[neg_begin:neg_end].mean(0, True)
+
             neg_proposals, neg_anchors, neg_pred_objectness_logits, neg_gt_labels, neg_pred_anchor_deltas, neg_gt_boxes = self.proposal_generator(query_images, neg_features, query_gt_instances)
             neg_pred_class_logits, neg_pred_proposal_deltas, neg_detector_proposals, neg_object_pred = \
                 self.roi_heads(query_images, query_features, neg_support_box_features, neg_support_box_features_res3,
-                               neg_proposals, query_gt_instances)
+                               neg_support_box_features_res4, neg_proposals, query_gt_instances)
 
             # rpn loss
             outputs_images = ImageList.from_tensors([images[i], images[i]])
@@ -298,7 +303,7 @@ class FsodRCNN(nn.Module):
             reverse_id_mapper = lambda dataset_id: metadata.thing_dataset_id_to_contiguous_id[dataset_id]  # noqa
             support_df['category_id'] = support_df['category_id'].map(reverse_id_mapper)
 
-            support_dict = {'res3_avg': {}, 'res4_avg': {}, 'res5_avg': {}}
+            support_dict = {'res3_mean': {}, 'res4_mean': {}, 'res4_avg': {}, 'res5_mean': {}}
             for cls in support_df['category_id'].unique():
                 support_cls_df = support_df.loc[support_df['category_id'] == cls, :].reset_index()
                 support_data_all = []
@@ -319,24 +324,25 @@ class FsodRCNN(nn.Module):
                 support_images = ImageList.from_tensors(support_images, self.backbone.size_divisibility)
                 support_features = self.backbone(support_images.tensor)
 
-                res3_pooled = self.roi_heads.roi_pooling_res3(support_features, support_box_all)
-                res3_avg = res3_pooled.mean(0, True)
-                support_dict['res3_avg'][cls] = res3_avg.detach().cpu().data
+                res3_feature = self.roi_heads.roi_pooling_res3(support_features, support_box_all)
+                res3_mean = res3_feature.mean(0, True)
+                support_dict['res3_mean'][cls] = res3_mean.detach().cpu().data
 
                 res4_pooled = self.roi_heads.roi_pooling(support_features, support_box_all)
-                res4_avg = res4_pooled.mean(0, True)
-                res4_avg = res4_avg.mean(dim=[2,3], keepdim=True)
+                res4_mean = res4_pooled.mean(0, True)
+                res4_avg = res4_mean.mean(dim=[2,3], keepdim=True)
                 support_dict['res4_avg'][cls] = res4_avg.detach().cpu().data
+                support_dict['res4_mean'][cls] = res4_mean.detach().cpu().data
 
                 res5_feature = self.roi_heads._shared_roi_transform([support_features[f] for f in self.in_features], support_box_all)
-                res5_avg = res5_feature.mean(0, True)
-                support_dict['res5_avg'][cls] = res5_avg.detach().cpu().data
+                res5_mean = res5_feature.mean(0, True)
+                support_dict['res5_mean'][cls] = res5_mean.detach().cpu().data
 
                 del res4_avg
                 del res4_pooled
                 del support_features
                 del res5_feature
-                del res5_avg
+                del res5_mean
 
             with open(support_file_name, 'wb') as f:
                pickle.dump(support_dict, f)
@@ -377,6 +383,7 @@ class FsodRCNN(nn.Module):
         support_proposals_dict = {}
         support_box_features_dict = {}
         support_box_features_res3_dict = {}
+        support_box_features_res4_dict = {}
         proposal_num_dict = {}
  
         for cls_id, res4_avg in self.support_dict['res4_avg'].items():
@@ -387,8 +394,9 @@ class FsodRCNN(nn.Module):
             query_features = {'res3': query_features_res3, 'res4': query_features_res4} # one query feature for rcnn
 
             # support branch ##################################
-            support_box_features = self.support_dict['res5_avg'][cls_id]
-            support_box_features_res3 = self.support_dict['res3_avg'][cls_id]
+            support_box_features = self.support_dict['res5_mean'][cls_id]
+            support_box_features_res3 = self.support_dict['res3_mean'][cls_id]
+            support_box_features_res4 = self.support_dict['res4_mean'][cls_id]
 
             correlation = F.conv2d(query_features_res4, res4_avg.permute(1,0,2,3), groups=1024) # attention map
 
@@ -398,6 +406,7 @@ class FsodRCNN(nn.Module):
             support_proposals_dict[cls_id] = proposals
             support_box_features_dict[cls_id] = support_box_features
             support_box_features_res3_dict[cls_id] = support_box_features_res3
+            support_box_features_res4_dict[cls_id] = support_box_features_res4
 
             if cls_id not in proposal_num_dict.keys():
                 proposal_num_dict[cls_id] = []
@@ -409,7 +418,7 @@ class FsodRCNN(nn.Module):
             del query_features_res4
 
         results, _ = self.roi_heads.eval_with_support(query_images, query_features, support_proposals_dict,
-                                                      support_box_features_dict, support_box_features_res3_dict)
+                                                      support_box_features_dict, support_box_features_res3_dict, support_box_features_res4_dict)
         
         if do_postprocess:
             return FsodRCNN._postprocess(results, batched_inputs, images.image_sizes)

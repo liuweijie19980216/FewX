@@ -129,8 +129,8 @@ class FsodRes5ROIHeads(ROIHeads):
 
         return box_features
 
-    def forward(self, images, features, support_box_features, support_box_features_res3, proposals,
-                targets=None):
+    def forward(self, images, features, support_box_features, support_box_features_res3,
+                support_box_features_res4, proposals, targets=None):
         """
         See :meth:`ROIHeads.forward`.
         """
@@ -145,15 +145,19 @@ class FsodRes5ROIHeads(ROIHeads):
             [features[f] for f in self.in_features], proposal_boxes
         )
         box_features_res3 = self.roi_pooling_res3(features, proposal_boxes)
-
+        box_features_res4 = self.roi_pooling(features, proposal_boxes)
         #support_features = self.res5(support_features)
         pred_class_logits, pred_proposal_deltas, pred_object = self.box_predictor(box_features, support_box_features,
-                                                                                box_features_res3, support_box_features_res3)
+                                                                                  box_features_res3, support_box_features_res3,
+                                                                                  box_features_res4, support_box_features_res4)
+
+
 
         return pred_class_logits, pred_proposal_deltas, proposals, pred_object# , scae_loss
 
     @torch.no_grad()
-    def eval_with_support(self, images, features, support_proposals_dict, support_box_features_dict, support_box_features_dict_res3):
+    def eval_with_support(self, images, features, support_proposals_dict, support_box_features_dict,
+                          support_box_features_dict_res3, support_box_features_dict_res4):
         """
         See :meth:`ROIHeads.forward`.
         """
@@ -174,6 +178,7 @@ class FsodRes5ROIHeads(ROIHeads):
             [features[f] for f in self.in_features], proposal_boxes
         )
         box_features_res3 = self.roi_pooling_res3(features, proposal_boxes)
+        box_features_res4 = self.roi_pooling(features, proposal_boxes)
         
         full_scores_ls = []
         full_bboxes_ls = []
@@ -183,11 +188,14 @@ class FsodRes5ROIHeads(ROIHeads):
         for cls_id in cls_ls:
             support_box_features = support_box_features_dict[cls_id]
             support_box_features_res3 = support_box_features_dict_res3[cls_id]
+            support_box_features_res4 = support_box_features_dict_res4[cls_id]
             query_features = box_features[cnt*100:(cnt+1)*100]
             query_features_res3 = box_features_res3[cnt*100:(cnt+1)*100]
+            query_features_res4 = box_features_res4[cnt * 100:(cnt + 1) * 100]
 
             pred_class_logits, pred_proposal_deltas,_ = self.box_predictor(query_features, support_box_features,
-                                                                         query_features_res3, support_box_features_res3)
+                                                                           query_features_res3, support_box_features_res3,
+                                                                           query_features_res4, support_box_features_res4)
             full_scores_ls.append(pred_class_logits)
             full_bboxes_ls.append(pred_proposal_deltas)
             full_cls_ls.append(torch.full_like(pred_class_logits[:, 0].unsqueeze(-1), cls_id).to(torch.int8))

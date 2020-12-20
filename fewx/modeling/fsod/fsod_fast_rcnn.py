@@ -512,7 +512,7 @@ class FsodFastRCNNOutputLayers(nn.Module):
             # fmt: on
         }
 
-    def forward(self, x_query, x_support, x_query_res3, x_support_res3):
+    def forward(self, x_query, x_support, x_query_res3, x_support_res3, x_query_res4, x_support_res4):
         support = x_support  # .mean(0, True) # avg pool on res4 or avg pool here?
         # fc
         if self.global_relation:
@@ -547,15 +547,15 @@ class FsodFastRCNNOutputLayers(nn.Module):
         # final result
 
         if self.capsule_relation:
-            batch_size = x_support_res3.size(0)
+            batch_size = x_support_res4.size(0)
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             if self.training:
                 mode = 'train'
             else:
                 mode = 'test'
             # part
-            support_part, support_object, support_object_score  = self.scae(x_support_res3, device, mode)
-            query_part, query_object, query_object_score = self.scae(x_query_res3, device, mode)
+            support_part, support_object, support_object_score  = self.scae(x_support_res4, device, mode)
+            query_part, query_object, query_object_score = self.scae(x_query_res4, device, mode)
             query_part_list = [query_part[i] for i in range(batch_size)]
             part_correlation = [torch.mm(query_part_list[i], support_part.squeeze().T)
                                 for i in range(batch_size)]
