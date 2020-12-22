@@ -29,8 +29,19 @@ class PCAE(nn.Module):
         #                               nn.Conv2d(128, 128, 3, stride=1),
         #                               nn.ReLU(),
         #                               nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))
-        # res4
-        self.capsules = nn.Sequential(nn.Conv2d(1024, 128, 3, stride=2),
+        # # res4
+        # self.capsules = nn.Sequential(nn.Conv2d(1024, 128, 3, stride=2),
+        #                               nn.ReLU(),
+        #                               # nn.Conv2d(128, 128, 3, stride=2),
+        #                               # nn.ReLU(),
+        #                               # nn.Conv2d(128, 128, 3, stride=1),
+        #                               # nn.ReLU(),
+        #                               nn.Conv2d(128, 128, 3, stride=1),
+        #                               nn.ReLU(),
+        #                               nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))
+
+        # res5
+        self.capsules = nn.Sequential(nn.Conv2d(2048, 128, 3, stride=1),
                                       nn.ReLU(),
                                       # nn.Conv2d(128, 128, 3, stride=2),
                                       # nn.ReLU(),
@@ -39,6 +50,8 @@ class PCAE(nn.Module):
                                       nn.Conv2d(128, 128, 3, stride=1),
                                       nn.ReLU(),
                                       nn.Conv2d(128, num_capsules * num_feature_maps, 1, stride=1))
+
+
 
 
         self.templates = nn.ParameterList([nn.Parameter(torch.randn(1, template_size, template_size))
